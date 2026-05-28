@@ -1,0 +1,1 @@
+yarn run rimraf localenv/argo-cd/repo/.git

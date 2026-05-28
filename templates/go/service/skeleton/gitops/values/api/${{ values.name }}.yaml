@@ -1,0 +1,19 @@
+enabled: true
+replicas: 1
+language: go
+version: "0.0.1"
+environment: prod
+image:
+  repository: ghcr.io/kamuridesu/${{ values.name }}
+
+service:
+  port: 8080
+
+ingress:
+  enabled: true
+  className: haproxy
+  hosts:
+    - host: api.kamuridesu.com
+      paths:
+        - path: /${{ values.name }}
+          pathType: Prefix

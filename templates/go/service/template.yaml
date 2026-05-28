@@ -1,0 +1,84 @@
+# yaml-language-server: $schema=https://json.schemastore.org/catalog-info.json
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: go-service
+  title: New Go Service
+  description: Scaffolds a new Go API with database connection configured.
+spec:
+  owner: test
+  type: service
+
+  parameters:
+    - title: Repository Location
+      required:
+        - repoLocation
+      properties:
+        repoLocation:
+          title: Repository Location
+          type: string
+          ui:field: RepoUrlPicker
+          ui:options:
+            allowedHosts:
+              - localhost:3000
+            allowedOwners:
+              - test-org
+
+  steps:
+    - id: fetch-code
+      name: Fetching Go Skeleton
+      action: fetch:template
+      input:
+        url: ./skeleton/code
+        values:
+          name: ${{ (parameters.repoLocation | parseRepoUrl).repo }}
+
+    - id: publish-code
+      name: Publishing to Forgejo
+      action: publish:gitea
+      input:
+        repoUrl: ${{ parameters.repoLocation }}
+        description: Source code for ${{ (parameters.repoLocation | parseRepoUrl).repo }}
+        defaultBranch: main
+        repoVisibility: private
+
+    - id: clear-workspace
+      name: Preparing workspace for GitOps Manifests
+      action: fs:delete
+      input:
+        files: ['.']
+
+    - id: fetch-gitops
+      name: generating GitOps values manifest
+      action: fetch:template
+      input:
+        url: ./skeleton/gitops/
+        targetPath: ./gitops-rendered
+        values:
+          name: ${{ (parameters.repoLocation | parseRepoUrl).repo }}
+
+    - id: publish-gitops
+      name: Registering service in central ArgoCD repo
+      action: forgejo:commit-directory
+      input:
+        owner: ${{ (parameters.repoLocation | parseRepoUrl).owner }}
+        repo: argo-cd-repo
+        sourcePath: ./gitops-rendered
+        createPR: true
+
+    - id: register-catalog
+      name: Registering component in backstage
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps['publish-code'].output.repoContentsUrl }}
+        catalogInfoPath: 'catalog-info.yaml'
+
+  output:
+    links:
+      - title: Go to Repository
+        url: ${{ steps['publish-code'].output.remoteUrl }}
+      - title: Go to ArgoCD pull request
+        url: ${{ steps['publish-gitops'].output.remoteUrl }}
+      - title: Open in Catalog
+        icon: catalog
+        entityRef: ${{ steps['register-catalog'].output.entityRef }}

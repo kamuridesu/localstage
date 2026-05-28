@@ -1,0 +1,12 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.name }}
+  description: Source code for the ${{ values.name }} service
+  annotations:
+    gitea.com/project-slug: test/${{ values.name }}
+    argocd/app-name: ${{ values.name }}
+spec:
+  type: service
+  lifecycle: experimental
+  owner: user:guest

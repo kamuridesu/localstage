@@ -1,0 +1,16 @@
+diff --git a/dist/entrypoints/urlReader/lib/GiteaUrlReader.cjs.js b/dist/entrypoints/urlReader/lib/GiteaUrlReader.cjs.js
+index f8eb650a46d22b38b47402b5709fecc17921541a..92b6de6fd45bb848fe67f16a6a5523745a67be72 100644
+--- a/dist/entrypoints/urlReader/lib/GiteaUrlReader.cjs.js
++++ b/dist/entrypoints/urlReader/lib/GiteaUrlReader.cjs.js
+@@ -45,9 +45,9 @@ class GiteaUrlReader {
+     }
+     if (response.ok) {
+       const { encoding, content } = await response.json();
+-      if (encoding === "base64") {
++      if (encoding === "base64" || !encoding) {
+         return ReadUrlResponseFactory.ReadUrlResponseFactory.fromReadable(
+-          node_stream.Readable.from(Buffer.from(content, "base64")),
++          node_stream.Readable.from(Buffer.from(content || '', "base64")),
+           {
+             etag: response.headers.get("ETag") ?? void 0,
+             lastModifiedAt: util.parseLastModified(
