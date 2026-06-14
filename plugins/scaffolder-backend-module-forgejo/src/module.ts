@@ -11,6 +11,7 @@ import {
 import simpleGit from 'simple-git';
 import fs from 'fs-extra';
 import path from 'path';
+import sodium from 'libsodium-wrappers';
 
 export const scaffolderModuleForgejo = createBackendModule({
   pluginId: 'scaffolder',
@@ -27,6 +28,7 @@ export const scaffolderModuleForgejo = createBackendModule({
         const integrations = ScmIntegrations.fromConfig(config);
         scaffolderActions.addActions(
           createForgejoWriteAction({ integrations }),
+          createForgejoGithubSyncAction({ integrations, config }),
         );
       },
     });
@@ -155,6 +157,420 @@ export function createForgejoWriteAction(options: {
       } finally {
         await fs.remove(targetCloneDir);
       }
+    },
+  });
+}
+
+export function createForgejoGithubSyncAction(options: {
+  integrations: ScmIntegrationRegistry;
+  config: any;
+}) {
+  const { integrations } = options;
+
+  return createTemplateAction({
+    id: 'forgejo:github-sync',
+    description:
+      'Ensures a Forgejo repository exists, and optionally mirrors it to GitHub with branch protection and encrypted secrets using split-DNS.',
+    schema: {
+      input: {
+        name: z => z.string().describe('Repository name'),
+        namespace: z => z.string().describe('Forgejo user or org'),
+        host: z =>
+          z
+            .string()
+            .optional()
+            .describe('Internal Forgejo host defined in app-config'),
+        private: z => z.boolean().default(true),
+        createOnGithub: z => z.boolean().default(false),
+        githubUser: z => z.string().describe('GitHub target user/org'),
+        description: z => z.string().optional(),
+        forgejoExternalApiUrl: z =>
+          z
+            .string()
+            .default('https://forgejo.kamuridesu.com')
+            .describe('External API route for Webhooks/REST'),
+      },
+    },
+    async handler(ctx) {
+      const {
+        name,
+        namespace,
+        host,
+        private: isPrivate,
+        createOnGithub,
+        githubUser,
+        description,
+        forgejoExternalApiUrl,
+      } = ctx.input;
+
+      ctx.logger.info(`Forgejo host: ${host}`);
+
+      const allGiteaIntegrations = integrations.gitea.list();
+      const forgejoConfig =
+        (host ? integrations.gitea.byHost(host) : undefined) ||
+        allGiteaIntegrations[0];
+
+      const forgejoToken = forgejoConfig?.config.password;
+      const forgejoInternalGitUrl = forgejoConfig?.config.baseUrl;
+
+      const githubToken =
+        process.env.GITHUB_TOKEN ||
+        integrations.github.list().at(0)?.config.token;
+
+      if (!forgejoToken)
+        throw new Error(
+          'Missing Forgejo credentials in Backstage configuration.',
+        );
+      if (createOnGithub && !githubToken)
+        throw new Error(
+          'Missing GitHub credentials in Backstage configuration.',
+        );
+
+      const fjHeaders = {
+        Authorization: `token ${forgejoToken}`,
+        'Content-Type': 'application/json',
+      };
+
+      const ghHeaders = {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${githubToken}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+
+      ctx.logger.info(
+        `[Phase 0.1] Checking Forgejo repository: ${namespace}/${name}`,
+      );
+
+      const fjRepoCheck = await fetch(
+        `${forgejoInternalGitUrl}/api/v1/repos/${namespace}/${name}`,
+        { headers: fjHeaders },
+      );
+
+      if (fjRepoCheck.status === 200) {
+        ctx.logger.info(
+          `[Forgejo] OK: Repository ${namespace}/${name} already exists.`,
+        );
+      } else if (fjRepoCheck.status === 404) {
+        ctx.logger.info(
+          `[Forgejo] Not found. Creating repository ${namespace}/${name}...`,
+        );
+
+        const fjOwnerCheck = await fetch(
+          `${forgejoInternalGitUrl}/api/v1/users/${namespace}`,
+          { headers: fjHeaders },
+        );
+        const fjOwnerData = await fjOwnerCheck.json();
+
+        const fjCreateUrl =
+          fjOwnerData.type === 'Organization'
+            ? `${forgejoInternalGitUrl}/api/v1/orgs/${namespace}/repos`
+            : `${forgejoInternalGitUrl}/api/v1/user/repos`;
+
+        const fjCreate = await fetch(fjCreateUrl, {
+          method: 'POST',
+          headers: fjHeaders,
+          body: JSON.stringify({
+            name: name,
+            private: isPrivate,
+            description: description || 'Created via Backstage',
+            auto_init: true,
+            default_branch: 'main',
+          }),
+        });
+
+        if (!fjCreate.ok) {
+          throw new Error(
+            `Failed to create Forgejo repo: ${await fjCreate.text()}`,
+          );
+        }
+        ctx.logger.info(`[Forgejo] OK: Repository created successfully.`);
+      } else {
+        throw new Error(
+          `Forgejo repository check failed with HTTP ${fjRepoCheck.status}`,
+        );
+      }
+
+      if (!createOnGithub) {
+        ctx.logger.info(
+          `createOnGithub is false. Pipeline completed successfully after Forgejo operations.`,
+        );
+        return;
+      }
+
+      ctx.logger.info(
+        `[Phase 0.2] Checking GitHub repository: ${githubUser}/${name}`,
+      );
+
+      const ghRepoCheck = await fetch(
+        `https://api.github.com/repos/${githubUser}/${name}`,
+        { headers: ghHeaders },
+      );
+
+      if (ghRepoCheck.status === 200) {
+        ctx.logger.info(
+          `[GitHub] OK: Repository ${githubUser}/${name} already exists.`,
+        );
+      } else if (ghRepoCheck.status === 404) {
+        ctx.logger.info(
+          `[GitHub] Not found. Creating repository ${githubUser}/${name}...`,
+        );
+
+        const ghOwnerCheck = await fetch(
+          `https://api.github.com/users/${githubUser}`,
+          { headers: ghHeaders },
+        );
+        const ghOwnerData = await ghOwnerCheck.json();
+
+        const ghCreateUrl =
+          ghOwnerData.type === 'Organization'
+            ? `https://api.github.com/orgs/${githubUser}/repos`
+            : `https://api.github.com/user/repos`;
+
+        const ghCreate = await fetch(ghCreateUrl, {
+          method: 'POST',
+          headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name,
+            private: isPrivate,
+            description: description || 'Mirrored from Forgejo',
+            auto_init: true,
+          }),
+        });
+
+        if (!ghCreate.ok) {
+          throw new Error(
+            `Failed to create GitHub repo: ${await ghCreate.text()}`,
+          );
+        }
+        ctx.logger.info(`[GitHub] OK: Repository created successfully.`);
+      } else {
+        throw new Error(
+          `GitHub repository check failed with HTTP ${ghRepoCheck.status}`,
+        );
+      }
+
+      ctx.logger.info(`[Phase 1] Configuring Forgejo Push Mirror...`);
+
+      const mirrorUrl = `https://github.com/${githubUser}/${name}.git`;
+
+      const mirrorRes = await fetch(
+        `${forgejoInternalGitUrl}/api/v1/repos/${namespace}/${name}/push_mirrors`,
+        {
+          method: 'POST',
+          headers: fjHeaders,
+          body: JSON.stringify({
+            remote_address: mirrorUrl,
+            remote_username: githubUser,
+            remote_password: githubToken,
+            sync_on_commit: true,
+            interval: '8h',
+          }),
+        },
+      );
+
+      if (!mirrorRes.ok) {
+        ctx.logger.warn(
+          `Push mirror may already exist or failed to configure: ${await mirrorRes.text()}`,
+        );
+      }
+
+      ctx.logger.info(`[Phase 2] Applying Branch Guardrails & Labels...`);
+
+      await fetch(
+        `https://api.github.com/repos/${githubUser}/${name}/branches/main/protection`,
+        {
+          method: 'PUT',
+          headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            required_status_checks: null,
+            enforce_admins: false,
+            required_pull_request_reviews: {
+              dismiss_stale_reviews: false,
+              require_code_owner_reviews: false,
+              required_approving_review_count: 1,
+            },
+            restrictions: null,
+            allow_force_pushes: true,
+          }),
+        },
+      );
+
+      await fetch(`https://api.github.com/repos/${githubUser}/${name}/labels`, {
+        method: 'POST',
+        headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'sync-to-forgejo',
+          color: '1D76DB',
+          description: 'Approves secure sync to Forgejo',
+        }),
+      });
+
+      ctx.logger.info(`[Phase 3] Injecting Workflow...`);
+
+      const environmentBlock = isPrivate ? '' : '    environment: forgejo-sync';
+
+      const yamlTemplate = `name: Secure Sync GitHub PR to Forgejo
+
+on:
+  pull_request_target:
+    types: [labeled, synchronize]
+
+jobs:
+  sync-to-forgejo:
+    if: contains(github.event.pull_request.labels.*.name, 'sync-to-forgejo')
+    runs-on: ubuntu-latest
+${environmentBlock}
+    steps:
+      - name: Safely Fetch and Push PR Branch
+        env:
+          FORGEJO_GIT_URL: \${{ secrets.FORGEJO_GIT_URL }}
+          FORGEJO_USER: \${{ secrets.FORGEJO_USER }}
+          FORGEJO_TOKEN: \${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          BRANCH_NAME="github-pr-\${{ github.event.pull_request.number }}"
+          
+          git clone --bare https://x-access-token:\${{ secrets.GITHUB_TOKEN }}@github.com/\${{ github.repository }}.git .
+          git fetch origin pull/\${{ github.event.pull_request.number }}/head:pr-branch
+          
+          CLEAN_HOST="\${FORGEJO_GIT_URL#*://}"
+          PROTOCOL="\${FORGEJO_GIT_URL%%://*}"
+          
+          git push "$PROTOCOL://$FORGEJO_USER:$FORGEJO_TOKEN@$CLEAN_HOST/${namespace}/${name}.git" pr-branch:refs/heads/$BRANCH_NAME -f
+
+      - name: Create PR on Forgejo via API
+        if: github.event.action == 'labeled' && github.event.label.name == 'sync-to-forgejo'
+        env:
+          FORGEJO_API_URL: \${{ secrets.FORGEJO_API_URL }}
+          FORGEJO_TOKEN: \${{ secrets.FORGEJO_TOKEN }}
+          GH_PR_TITLE: \${{ github.event.pull_request.title }}
+          GH_PR_BODY: \${{ github.event.pull_request.body }}
+          GH_PR_USER: \${{ github.event.pull_request.user.login }}
+          GH_PR_URL: \${{ github.event.pull_request.html_url }}
+        run: |
+          BRANCH_NAME="github-pr-\${{ github.event.pull_request.number }}"
+          PR_BODY="**Original GitHub PR by @$GH_PR_USER:** $GH_PR_URL \\n\\n$GH_PR_BODY"
+          
+          JSON_PAYLOAD=$(jq -n \\
+            --arg title "$GH_PR_TITLE" \\
+            --arg body "$PR_BODY" \\
+            --arg head "$BRANCH_NAME" \\
+            --arg base "main" \\
+            '{title: $title, body: $body, head: $head, base: $base}')
+
+          curl -X POST "$FORGEJO_API_URL/api/v1/repos/${namespace}/${name}/pulls" \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: token $FORGEJO_TOKEN" \\
+            -d "$JSON_PAYLOAD"
+`;
+
+      const fileCreateRes = await fetch(
+        `${forgejoInternalGitUrl}/api/v1/repos/${namespace}/${name}/contents/.github/workflows/forgejo-pr-sync.yml`,
+        {
+          method: 'POST',
+          headers: fjHeaders,
+          body: JSON.stringify({
+            content: Buffer.from(yamlTemplate).toString('base64'),
+            message: 'Deploy GitHub PR Sync Workflow via Backstage',
+            branch: 'main',
+          }),
+        },
+      );
+
+      if (!fileCreateRes.ok) {
+        ctx.logger.warn(
+          `Could not commit workflow to Forgejo. It may already exist. HTTP ${fileCreateRes.status}`,
+        );
+      }
+
+      ctx.logger.info(`[Phase 3.5] Injecting catalog-info.yaml...`);
+
+      const catalogInfoContent = `apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${name}
+  description: ${description || 'A bare repository provisioned via Backstage'}
+  annotations:
+    gitea.com/project-slug: ${namespace}/${name}
+    github.com/project-slug: ${githubUser}/${name}
+spec:
+  type: service
+  lifecycle: experimental
+  owner: ${namespace}
+`;
+
+      const catalogCreateRes = await fetch(
+        `${forgejoInternalGitUrl}/api/v1/repos/${namespace}/${name}/contents/catalog-info.yaml`,
+        {
+          method: 'POST',
+          headers: fjHeaders,
+          body: JSON.stringify({
+            content: Buffer.from(catalogInfoContent).toString('base64'),
+            message: 'Initialize Backstage catalog-info.yaml',
+            branch: 'main',
+          }),
+        },
+      );
+
+      if (!catalogCreateRes.ok) {
+        ctx.logger.warn(
+          `Could not commit catalog-info.yaml to Forgejo. HTTP ${catalogCreateRes.status}`,
+        );
+      }
+
+      ctx.logger.info(`[Phase 4] Provisioning Encrypted Secrets...`);
+
+      await sodium.ready;
+
+      const setGithubSecret = async (
+        secretName: string,
+        secretValue: string,
+      ) => {
+        const keyRes = await fetch(
+          `https://api.github.com/repos/${githubUser}/${name}/actions/secrets/public-key`,
+          { headers: ghHeaders },
+        );
+        if (!keyRes.ok)
+          throw new Error(
+            `Failed to fetch public key for secret ${secretName}: ${await keyRes.text()}`,
+          );
+
+        const keyData = await keyRes.json();
+
+        const binkey = sodium.from_base64(
+          keyData.key,
+          sodium.base64_variants.ORIGINAL,
+        );
+        const binsec = sodium.from_string(secretValue);
+        const encBytes = sodium.crypto_box_seal(binsec, binkey);
+        const encryptedValue = sodium.to_base64(
+          encBytes,
+          sodium.base64_variants.ORIGINAL,
+        );
+
+        const putRes = await fetch(
+          `https://api.github.com/repos/${githubUser}/${name}/actions/secrets/${secretName}`,
+          {
+            method: 'PUT',
+            headers: { ...ghHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              encrypted_value: encryptedValue,
+              key_id: keyData.key_id,
+            }),
+          },
+        );
+
+        if (!putRes.ok)
+          ctx.logger.error(
+            `Failed to upload secret ${secretName}: ${await putRes.text()}`,
+          );
+      };
+
+      await setGithubSecret('FORGEJO_API_URL', forgejoExternalApiUrl);
+      await setGithubSecret('FORGEJO_GIT_URL', forgejoInternalGitUrl || '');
+      await setGithubSecret('FORGEJO_USER', namespace);
+      await setGithubSecret('FORGEJO_TOKEN', forgejoToken);
+
+      ctx.logger.info(`[Success] Pipeline complete for ${namespace}/${name}.`);
     },
   });
 }

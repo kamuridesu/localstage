@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://json.schemastore.org/catalog-info.json
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: prometheus
+  description: Central Prometheus monitoring and metrics server
+spec:
+  type: metrics
+  owner: infra
+  system: core-infrastructure
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: grafana
+  description: Central Grafana observability platform
+spec:
+  type: dashboard
+  owner: infra
+  system: core-infrastructure
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: qdrant
+  description: Vector database for RAG document storage and semantic search
+spec:
+  type: database
+  owner: infra
+  system: aiops

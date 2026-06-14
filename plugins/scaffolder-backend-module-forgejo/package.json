@@ -30,6 +30,7 @@
     "@backstage/integration": "^2.0.1",
     "@backstage/plugin-scaffolder-node": "^0.11.3",
     "fs-extra": "^11.3.5",
+    "libsodium-wrappers": "^0.8.4",
     "simple-git": "^3.36.0",
     "zod": "^4.4.3"
   },

@@ -6,23 +6,46 @@ metadata:
   title: New Go Service
   description: Scaffolds a new Go API with database connection configured.
 spec:
-  owner: test
+  owner: infra
   type: service
 
   parameters:
     - title: Repository Location
       required:
-        - repoLocation
+        - repoOwner
+        - repoName
       properties:
-        repoLocation:
-          title: Repository Location
+        repoOwner:
+          title: Owner / Namespace
           type: string
-          ui:field: RepoUrlPicker
-          ui:options:
-            allowedHosts:
-              - localhost:3000
-            allowedOwners:
-              - test-org
+          description: The Forgejo user or organization that will own the repository.
+        repoName:
+          title: Repository Name
+          type: string
+          description: The name of the new repository.
+        isPrivate:
+          title: Private Repository
+          type: boolean
+          default: true
+          description: Restrict access to this repository?
+
+    - title: GitHub Synchronization
+      properties:
+        createOnGithub:
+          title: Enable GitHub Mirroring
+          type: boolean
+          default: false
+        githubUser:
+          title: GitHub Target Namespace
+          type: string
+
+    - title: GitOps Configuration
+      properties:
+        createGitopsPr:
+          title: Create GitOps PR
+          type: boolean
+          default: false
+          description: If checked, generates GitOps manifests and opens a PR in the central ArgoCD repository.
 
   steps:
     - id: fetch-code
@@ -31,38 +54,54 @@ spec:
       input:
         url: ./skeleton/code
         values:
-          name: ${{ (parameters.repoLocation | parseRepoUrl).repo }}
+          name: ${{ parameters.repoName }}
+
+    - id: sync-repo
+      name: Provisioning Repository & Mirrors
+      action: forgejo:github-sync
+      input:
+        name: ${{ parameters.repoName }}
+        namespace: ${{ parameters.repoOwner }}
+        host: forgejo.internal
+        private: ${{ isPrivate }}
+        createOnGithub: ${{ parameters.createOnGithub }}
+        githubUser: ${{ parameters.githubUser }}
+        forgejoExternalApiUrl: https://forgejo.kamuridesu.com
 
     - id: publish-code
-      name: Publishing to Forgejo
-      action: publish:gitea
+      name: Pushing Code to Forgejo
+      action: forgejo:commit-directory
       input:
-        repoUrl: ${{ parameters.repoLocation }}
-        description: Source code for ${{ (parameters.repoLocation | parseRepoUrl).repo }}
-        defaultBranch: main
-        repoVisibility: private
+        owner: ${{ parameters.repoOwner }}
+        repo: ${{ parameters.repoName }}
+        sourcePath: "."
+        createPR: false
+        commitMessage: "Initial commit from Backstage Go Skeleton"
 
     - id: clear-workspace
       name: Preparing workspace for GitOps Manifests
+      if: ${{ parameters.createGitopsPr }}
       action: fs:delete
       input:
-        files: ['.']
+        files: ["."]
 
     - id: fetch-gitops
       name: generating GitOps values manifest
+      if: ${{ parameters.createGitopsPr }}
       action: fetch:template
       input:
         url: ./skeleton/gitops/
         targetPath: ./gitops-rendered
         values:
-          name: ${{ (parameters.repoLocation | parseRepoUrl).repo }}
+          name: ${{ parameters.repoName }}
 
     - id: publish-gitops
       name: Registering service in central ArgoCD repo
+      if: ${{ parameters.createGitopsPr }}
       action: forgejo:commit-directory
       input:
-        owner: ${{ (parameters.repoLocation | parseRepoUrl).owner }}
-        repo: argo-cd-repo
+        owner: ${{ parameters.repoOwner }}
+        repo: argocd-apps-test-helm
         sourcePath: ./gitops-rendered
         createPR: true
 
@@ -70,15 +109,22 @@ spec:
       name: Registering component in backstage
       action: catalog:register
       input:
-        repoContentsUrl: ${{ steps['publish-code'].output.repoContentsUrl }}
-        catalogInfoPath: 'catalog-info.yaml'
+        repoContentsUrl: http://forgejo.internal/${{ parameters.repoOwner }}/${{ parameters.repoName }}
+        catalogInfoPath: "/src/branch/main/catalog-info.yaml"
 
   output:
     links:
       - title: Go to Repository
-        url: ${{ steps['publish-code'].output.remoteUrl }}
+        url: http://forgejo.internal/${{ parameters.repoOwner }}/${{ parameters.repoName }}
+
       - title: Go to ArgoCD pull request
-        url: ${{ steps['publish-gitops'].output.remoteUrl }}
+        url: ${{ steps['publish-gitops'].output.pullRequestUrl }}
+        if: ${{ parameters.createGitopsPr }}
+
+      - title: Go to GitHub Mirror
+        url: https://github.com/${{ parameters.githubUser }}/${{ parameters.repoName }}
+        if: ${{ parameters.createOnGithub }}
+
       - title: Open in Catalog
         icon: catalog
         entityRef: ${{ steps['register-catalog'].output.entityRef }}

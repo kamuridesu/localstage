@@ -1,0 +1,84 @@
+# yaml-language-server: $schema=https://json.schemastore.org/catalog-info.json
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: bare-repository
+  title: New Bare Repository
+  description: Provisions an empty Forgejo repository with optional GitHub mirroring, branch protection, and Vault secrets.
+  tags:
+    - forgejo
+    - github
+    - infrastructure
+spec:
+  owner: infra
+  type: service
+
+  parameters:
+    - title: Forgejo Repository Details
+      required:
+        - repoOwner
+        - repoName
+      properties:
+        repoOwner:
+          title: Owner / Namespace
+          type: string
+          description: The Forgejo user or organization that will own the repository.
+        repoName:
+          title: Repository Name
+          type: string
+          description: The name of the new repository.
+        description:
+          title: Description
+          type: string
+          description: A brief description of the repository's purpose.
+        isPrivate:
+          title: Private Repository
+          type: boolean
+          default: true
+          description: Restrict access to this repository?
+
+    - title: GitHub Synchronization
+      properties:
+        createOnGithub:
+          title: Enable GitHub Mirroring
+          type: boolean
+          default: false
+          description: If checked, provisions a companion GitHub repository, push mirror, and PR sync workflow.
+        githubUser:
+          title: GitHub Target Namespace
+          type: string
+          description: The GitHub Organization or User where the mirror should be created.
+          ui:help: Required if "Enable GitHub Mirroring" is checked.
+
+  steps:
+    - id: provision-repo
+      name: Provisioning Infrastructure
+      action: forgejo:github-sync
+      input:
+        name: ${{ parameters.repoName }}
+        namespace: ${{ parameters.repoOwner }}
+        private: ${{ parameters.isPrivate }}
+        description: ${{ parameters.description }}
+        createOnGithub: ${{ parameters.createOnGithub }}
+        githubUser: ${{ parameters.githubUser }}
+        forgejoExternalApiUrl: https://forgejo.kamuridesu.com
+
+    - id: register-catalog
+      name: Registering in Backstage Catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: http://forgejo.internal/${{ parameters.repoOwner }}/${{ parameters.repoName }}
+        catalogInfoPath: '/src/branch/main/catalog-info.yaml'
+
+  output:
+    links:
+      - title: Go to Forgejo Repository
+        url: http://forgejo.internal/${{ parameters.repoOwner }}/${{ parameters.repoName }}
+
+      - title: Go to GitHub Mirror
+        url: https://github.com/${{ parameters.githubUser }}/${{ parameters.repoName }}
+        if: ${{ parameters.createOnGithub }}
+
+      - title: Open in Catalog
+        icon: catalog
+        entityRef: ${{ steps['register-catalog'].output.entityRef }}

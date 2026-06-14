@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://json.schemastore.org/catalog-info.json
+apiVersion: backstage.io/v1alpha1
+kind: Location
+metadata:
+  name: master-template-index
+spec:
+  targets:
+    - ./org/groups.yaml
+    - ./org/users.yaml
+    - ./architecture/systems.yaml
+    - ./architecture/domains.yaml
+    - ./architecture/resources.yaml

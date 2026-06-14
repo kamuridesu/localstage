@@ -33,7 +33,7 @@ backend:
     # Uncomment the following host directive to bind to specific interfaces
     # host: 127.0.0.1
   csp:
-    connect-src: ["'self'", "http:", "https:"]
+    connect-src: ["'self'", 'http:', 'https:']
     # Content-Security-Policy directives follow the Helmet format: https://helmetjs.github.io/#reference
     # Default Helmet Content-Security-Policy values can be removed by setting the key to false
   cors:
@@ -45,7 +45,7 @@ backend:
   database:
     client: better-sqlite3
     connection:
-      directory: "../../db"
+      directory: '../../db'
   # see https://backstage.io/docs/ai/mcp-actions#actions-configuration for more details
   actions:
     pluginSources:
@@ -77,11 +77,11 @@ proxy:
 # and an external cloud storage when deploying TechDocs for production use-case.
 # https://backstage.io/docs/features/techdocs/how-to-guides#how-to-migrate-from-techdocs-basic-to-recommended-deployment-approach
 techdocs:
-  builder: "local" # Alternatives - 'external'
+  builder: 'local' # Alternatives - 'external'
   generator:
-    runIn: "docker" # Alternatives - 'local'
+    runIn: 'docker' # Alternatives - 'local'
   publisher:
-    type: "local" # Alternatives - 'googleGcs' or 'awsS3'. Read documentation for using alternatives.
+    type: 'local' # Alternatives - 'googleGcs' or 'awsS3'. Read documentation for using alternatives.
 
 auth:
   # see https://backstage.io/docs/auth/ to learn about auth providers
@@ -109,12 +109,17 @@ catalog:
     entityFilename: catalog-info.yaml
     pullRequestBranchName: backstage-integration
   rules:
-    - allow: [Component, System, API, Resource, Location]
+    - allow: [Component, System, API, Resource, Location, Template]
   locations:
     - type: file
-      target: ../../templates/go/service/template.yaml
+      target: ../../catalog/index.yaml
       rules:
-        - allow: [Template]
+        - allow: [Location, Group, User, System, Domain, Resource]
+
+    - type: file
+      target: ../../templates/index.yaml
+      rules:
+        - allow: [Template, Location]
 
     # Local example data, file locations are relative to the backend process, typically `packages/backend`
     - type: file
@@ -152,5 +157,5 @@ permission:
 
 # see https://backstage.io/docs/ai/mcp-actions for more details
 mcpActions:
-  name: "My Company Backstage" # defaults to "backstage"
-  description: "Tools for managing your software catalog, creating new services from templates, and exploring your developer portal" # optional
+  name: 'My Company Backstage' # defaults to "backstage"
+  description: 'Tools for managing your software catalog, creating new services from templates, and exploring your developer portal' # optional

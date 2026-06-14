@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://json.schemastore.org/catalog-info.json
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: core-infrastructure
+  description: My Core services
+spec:
+  owner: infra
+  domain: infra
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: aiops
+  description: Artificial Intelligence IT Operations and Automation
+spec:
+  owner: infra
+  domain: infra

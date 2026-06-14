@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://json.schemastore.org/catalog-info.json
+apiVersion: backstage.io/v1alpha1
+kind: Location
+metadata:
+  name: master-catalog-index
+spec:
+  targets:
+    - ./empty/template.yaml
+    - ./go/service/template.yaml

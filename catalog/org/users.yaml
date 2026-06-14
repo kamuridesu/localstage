@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://json.schemastore.org/catalog-info.json
+apiVersion: backstage.io/v1alpha1
+kind: User
+metadata:
+  name: kamuri
+  title: kamuri
+spec:
+  profile:
+    displayName: Kamuri Amorim
+    email: myk.gata14@gmail.com
+  memberOf:
+    - infra
